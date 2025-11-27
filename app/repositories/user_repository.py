@@ -77,7 +77,8 @@ class UserRepository:
         avatar_url: Optional[str] = None,
         trust_level: int = 0,
         is_active: bool = True,
-        is_silenced: bool = False
+        is_silenced: bool = False,
+        beta: int = 0
     ) -> User:
         """
         创建新用户
@@ -90,6 +91,7 @@ class UserRepository:
             trust_level: 信任等级
             is_active: 是否激活
             is_silenced: 是否禁言
+            beta: 是否加入beta计划
             
         Returns:
             创建的 User 对象
@@ -122,11 +124,12 @@ class UserRepository:
             avatar_url=avatar_url,
             trust_level=trust_level,
             is_active=is_active,
-            is_silenced=is_silenced
+            is_silenced=is_silenced,
+            beta=beta
         )
         
         self.db.add(user)
-        await self.db.commit()
+        await self.db.flush()  # 刷新到数据库但不提交
         await self.db.refresh(user)
         
         return user
@@ -159,14 +162,15 @@ class UserRepository:
         # 更新允许的字段
         allowed_fields = {
             'username', 'password_hash', 'oauth_id', 'avatar_url',
-            'trust_level', 'is_active', 'is_silenced', 'last_login_at'
+            'trust_level', 'is_active', 'is_silenced', 'last_login_at', 'beta'
         }
         
         for field, value in kwargs.items():
             if field in allowed_fields and hasattr(user, field):
                 setattr(user, field, value)
         
-        await self.db.commit()
+        # 不在这里提交，由会话管理器统一处理
+        await self.db.flush()  # 将更改刷新到数据库但不提交
         await self.db.refresh(user)
         
         return user
@@ -210,7 +214,8 @@ class UserRepository:
             )
         
         await self.db.delete(user)
-        await self.db.commit()
+        # 删除操作也由会话管理器统一提交
+        await self.db.flush()
         
         return True
     

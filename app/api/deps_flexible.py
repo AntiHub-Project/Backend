@@ -83,6 +83,9 @@ async def get_user_flexible(
                     detail="用户账号已被禁用"
                 )
             
+            # 将config_type附加到user对象上，供路由使用
+            user._config_type = key_record.config_type
+            
             return user
         else:
             # JWT token认证

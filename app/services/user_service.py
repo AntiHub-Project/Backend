@@ -193,6 +193,59 @@ class UserService:
         """
         return await self.user_repo.update_last_login(user_id)
     
+    # ==================== Beta 计划功能 ====================
+    
+    async def join_beta(self, user_id: int) -> User:
+        """
+        加入 Beta 计划
+        
+        Args:
+            user_id: 用户 ID
+            
+        Returns:
+            更新后的 User 对象
+            
+        Raises:
+            UserNotFoundError: 用户不存在
+        """
+        return await self.user_repo.update(user_id, beta=1)
+    
+    async def leave_beta(self, user_id: int) -> User:
+        """
+        退出 Beta 计划
+        
+        Args:
+            user_id: 用户 ID
+            
+        Returns:
+            更新后的 User 对象
+            
+        Raises:
+            UserNotFoundError: 用户不存在
+        """
+        return await self.user_repo.update(user_id, beta=0)
+    
+    async def get_beta_status(self, user_id: int) -> int:
+        """
+        获取用户的 Beta 计划状态
+        
+        Args:
+            user_id: 用户 ID
+            
+        Returns:
+            Beta 状态值
+            
+        Raises:
+            UserNotFoundError: 用户不存在
+        """
+        user = await self.user_repo.get_by_id(user_id)
+        if not user:
+            raise UserNotFoundError(
+                message=f"用户 ID {user_id} 不存在",
+                details={"user_id": user_id}
+            )
+        return user.beta
+    
     # ==================== OAuth 令牌存储 ====================
     
     async def save_oauth_token(

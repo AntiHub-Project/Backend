@@ -33,13 +33,23 @@ async def create_api_key(
 ):
     """创建新的API密钥"""
     try:
+        # 如果创建kiro配置的API key，检查beta权限
+        if request.config_type == "kiro" and current_user.beta != 1:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Kiro配置仅对beta计划用户开放，请联系管理员加入beta计划"
+            )
+        
         repo = APIKeyRepository(db)
         api_key = await repo.create(
             user_id=current_user.id,
-            name=request.name
+            name=request.name,
+            config_type=request.config_type
         )
         await db.commit()
         return APIKeyResponse.model_validate(api_key)
+    except HTTPException:
+        raise
     except Exception as e:
         await db.rollback()
         raise HTTPException(
@@ -70,6 +80,7 @@ async def list_api_keys(
                 user_id=key.user_id,
                 key_preview=key.key[:8] + "..." if len(key.key) > 8 else key.key,
                 name=key.name,
+                config_type=key.config_type,
                 is_active=key.is_active,
                 created_at=key.created_at,
                 last_used_at=key.last_used_at,

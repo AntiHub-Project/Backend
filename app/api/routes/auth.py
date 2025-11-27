@@ -29,7 +29,7 @@ from app.schemas.auth import (
     OAuthInitiateResponse,
     OAuthCallbackParams,
 )
-from app.schemas.user import UserResponse, OAuthUserCreate
+from app.schemas.user import UserResponse, OAuthUserCreate, JoinBetaResponse
 from app.core.config import get_settings
 from app.core.exceptions import (
     InvalidCredentialsError,
@@ -147,7 +147,7 @@ async def refresh_token(
     except (InvalidTokenError, TokenBlacklistedError) as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh Token 无效��已被撤销",
+            detail="Refresh Token 无效或已被撤销",
             headers={"WWW-Authenticate": "Bearer"}
         )
     except UserNotFoundError as e:
@@ -466,7 +466,7 @@ async def logout(
     """
     用户登出
     
-    需要在请求头中提��有效的 JWT 令牌:
+    需要在请求头中提供有效的 JWT 令牌:
     ```
     Authorization: Bearer <your_token>
     ```
@@ -524,7 +524,7 @@ async def logout_all_devices(
     Authorization: Bearer <your_token>
     ```
     
-    此操作将撤销用户的所有 refresh token，使所有设备都需要��新登录
+    此操作将撤销用户的所有 refresh token，使所有设备都需要重新登录
     """
     try:
         await auth_service.logout_all_devices(current_user.id)
@@ -541,7 +541,7 @@ async def logout_all_devices(
         )
 
 
-# ==================== 获取当前用��信息 ====================
+# ==================== 获取当前用户信息 ====================
 
 @router.get(
     "/me",
@@ -606,3 +606,98 @@ async def check_username(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"检查用户名失败"
         )
+
+
+# ==================== Beta 计划 ====================
+
+@router.post(
+    "/join-beta",
+    response_model=JoinBetaResponse,
+    summary="加入 Beta 计划",
+    description="当前用户加入 Beta 计划"
+)
+async def join_beta(
+    current_user: User = Depends(get_current_user),
+    user_service: UserService = Depends(get_user_service)
+):
+    """
+    加入 Beta 计划
+    
+    需要在请求头中提供有效的 JWT 令牌:
+    ```
+    Authorization: Bearer <your_token>
+    ```
+    
+    将当前用户的 beta 字段设置为 1
+    """
+    try:
+        # 先从数据库获取最新的用户状态
+        latest_user = await user_service.get_user_by_id(current_user.id)
+        if not latest_user:
+            raise UserNotFoundError(
+                message=f"用户 ID {current_user.id} 不存在",
+                details={"user_id": current_user.id}
+            )
+        
+        # 检查用户是否已经加入 beta
+        if latest_user.beta == 1:
+            return JoinBetaResponse(
+                success=True,
+                message="您已经加入了 Beta 计划",
+                beta=latest_user.beta
+            )
+        
+        # 加入 beta 计划
+        updated_user = await user_service.join_beta(current_user.id)
+        
+        return JoinBetaResponse(
+            success=True,
+            message="成功加入 Beta 计划",
+            beta=updated_user.beta
+        )
+        
+    except UserNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=e.message
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"加入 Beta 计划失败"
+        )
+
+
+@router.get(
+    "/beta-status",
+    response_model=JoinBetaResponse,
+    summary="获取 Beta 计划状态",
+    description="获取当前用户的 Beta 计划状态"
+)
+async def get_beta_status(
+    current_user: User = Depends(get_current_user),
+    user_service: UserService = Depends(get_user_service)
+):
+    """
+    获取 Beta 计划状态
+    
+    需要在请求头中提供有效的 JWT 令牌:
+    ```
+    Authorization: Bearer <your_token>
+    ```
+    
+    返回当前用户的 beta 状态
+    """
+    # 从数据库获取最新状态
+    latest_user = await user_service.get_user_by_id(current_user.id)
+    if not latest_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在"
+        )
+    
+    return JoinBetaResponse(
+        success=True,
+        message="已加入 Beta 计划" if latest_user.beta == 1 else "未加入 Beta 计划",
+        beta=latest_user.beta
+    )

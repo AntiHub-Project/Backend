@@ -14,7 +14,15 @@ from app.core.config import get_settings
 from app.core.exceptions import BaseAPIException
 from app.db.session import init_db, close_db
 from app.cache import init_redis, close_redis
-from app.api.routes import auth_router, health_router, plugin_api_router, api_keys_router, v1_router, usage_router
+from app.api.routes import (
+    auth_router,
+    health_router,
+    plugin_api_router,
+    api_keys_router,
+    v1_router,
+    usage_router,
+    kiro_router
+)
 
 # 配置日志
 logging.basicConfig(
@@ -106,7 +114,8 @@ def create_app() -> FastAPI:
     app.include_router(plugin_api_router, prefix="/api")
     app.include_router(api_keys_router, prefix="/api")
     app.include_router(usage_router, prefix="/api")
-    app.include_router(v1_router)  # OpenAI兼容API，直接在根路径
+    app.include_router(kiro_router)  # Kiro账号管理API (Beta)
+    app.include_router(v1_router)  # OpenAI兼容API，支持Antigravity和Kiro配置
     
     # ==================== 异常处理器 ====================
     

@@ -193,7 +193,8 @@ class PluginAPIService:
         method: str,
         path: str,
         json_data: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None
+        params: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         代理用户请求到plug-in-api
@@ -204,6 +205,7 @@ class PluginAPIService:
             path: API路径
             json_data: JSON请求体
             params: 查询参数
+            extra_headers: 额外的请求头
             
         Returns:
             API响应
@@ -219,6 +221,10 @@ class PluginAPIService:
         # 发送请求
         url = f"{self.base_url}{path}"
         headers = {"Authorization": f"Bearer {api_key}"}
+        
+        # 添加额外的请求头
+        if extra_headers:
+            headers.update(extra_headers)
         
         async with httpx.AsyncClient() as client:
             response = await client.request(
@@ -237,7 +243,8 @@ class PluginAPIService:
         user_id: int,
         method: str,
         path: str,
-        json_data: Optional[Dict[str, Any]] = None
+        json_data: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None
     ):
         """
         代理流式请求到plug-in-api
@@ -247,6 +254,7 @@ class PluginAPIService:
             method: HTTP方法
             path: API路径
             json_data: JSON请求体
+            extra_headers: 额外的请求头
             
         Yields:
             流式响应数据
@@ -262,6 +270,10 @@ class PluginAPIService:
         # 发送流式请求
         url = f"{self.base_url}{path}"
         headers = {"Authorization": f"Bearer {api_key}"}
+        
+        # 添加额外的请求头
+        if extra_headers:
+            headers.update(extra_headers)
         
         async with httpx.AsyncClient() as client:
             async with client.stream(
@@ -287,7 +299,9 @@ class PluginAPIService:
             user_id=user_id,
             method="POST",
             path="/api/oauth/authorize",
-            json_data={"is_shared": is_shared}
+            json_data={
+                "is_shared": is_shared
+            }
         )
     
     async def submit_oauth_callback(
@@ -396,12 +410,18 @@ class PluginAPIService:
             params=params
         )
     
-    async def get_models(self, user_id: int) -> Dict[str, Any]:
+    async def get_models(self, user_id: int, config_type: Optional[str] = None) -> Dict[str, Any]:
         """获取可用模型列表"""
+        extra_headers = {}
+        if config_type:
+            extra_headers["X-Account-Type"] = config_type
+        print(f"Using config_type header: {config_type}")
+        
         return await self.proxy_request(
             user_id=user_id,
             method="GET",
-            path="/v1/models"
+            path="/v1/models",
+            extra_headers=extra_headers if extra_headers else None
         )
     
     async def update_cookie_preference(

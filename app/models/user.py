@@ -81,6 +81,14 @@ class User(Base):
         comment="是否被禁言"
     )
     
+    # 是否加入beta计划
+    beta: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="是否加入beta计划"
+    )
+    
     # 时间戳
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

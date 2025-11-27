@@ -258,6 +258,11 @@ async def get_user_from_api_key(
                 detail="用户账号已被禁用"
             )
         
+        # 将config_type附加到user对象上，供路由使用
+        print(f"🔍 [deps.py] API Key ID: {key_record.id}, User ID: {key_record.user_id}, Config Type from DB: {key_record.config_type}")
+        user._config_type = key_record.config_type
+        print(f"🔍 [deps.py] Set user._config_type to: {user._config_type}")
+        
         return user
         
     except HTTPException:

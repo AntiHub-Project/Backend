@@ -16,13 +16,14 @@ class APIKeyRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
     
-    async def create(self, user_id: int, name: Optional[str] = None) -> APIKey:
+    async def create(self, user_id: int, name: Optional[str] = None, config_type: str = "antigravity") -> APIKey:
         """
         创建新的API密钥
         
         Args:
             user_id: 用户ID
             name: 密钥名称
+            config_type: 配置类型（antigravity 或 kiro）
             
         Returns:
             创建的API密钥对象
@@ -30,7 +31,8 @@ class APIKeyRepository:
         api_key = APIKey(
             user_id=user_id,
             key=APIKey.generate_key(),
-            name=name
+            name=name,
+            config_type=config_type
         )
         self.db.add(api_key)
         await self.db.flush()

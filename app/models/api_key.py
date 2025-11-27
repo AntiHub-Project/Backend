@@ -19,6 +19,7 @@ class APIKey(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     key = Column(String(128), unique=True, nullable=False, index=True)  # 我们生成的API key
     name = Column(String(100), nullable=True)  # 密钥名称，方便用户识别
+    config_type = Column(String(50), default="antigravity", nullable=False)  # 配置类型：antigravity 或 kiro
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     last_used_at = Column(DateTime(timezone=True), nullable=True)

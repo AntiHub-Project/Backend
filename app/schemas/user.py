@@ -86,6 +86,11 @@ class UserUpdate(BaseModel):
         None,
         description="是否被禁言"
     )
+    beta: Optional[int] = Field(
+        None,
+        ge=0,
+        description="是否加入beta计划"
+    )
     
     model_config = {
         "json_schema_extra": {
@@ -110,6 +115,7 @@ class UserResponse(BaseModel):
     trust_level: int = Field(..., description="用户信任等级")
     is_active: bool = Field(..., description="账号是否激活")
     is_silenced: bool = Field(..., description="是否被禁言")
+    beta: int = Field(default=0, description="是否加入beta计划")
     created_at: datetime = Field(..., description="创建时间")
     last_login_at: Optional[datetime] = Field(None, description="最后登录时间")
     
@@ -157,3 +163,15 @@ class OAuthUserCreate(BaseModel):
             ]
         }
     }
+
+
+# ==================== Beta 计划 Schema ====================
+
+class JoinBetaResponse(BaseModel):
+    """加入beta计划响应"""
+    
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="响应消息")
+    beta: int = Field(..., description="当前beta状态")
+    
+    model_config = ConfigDict(from_attributes=True)

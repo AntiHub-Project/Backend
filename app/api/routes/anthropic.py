@@ -221,7 +221,7 @@ async def create_message(
     description="计算消息的token数量（Anthropic兼容）"
 )
 async def count_tokens(
-    request: AnthropicMessagesRequest,
+    raw_request: Request,
     current_user: User = Depends(get_user_flexible_with_x_api_key)
 ):
     """
@@ -230,27 +230,46 @@ async def count_tokens(
     注意：这是一个简化实现，实际token计数可能与Anthropic官方有差异
     """
     try:
+        # 手动解析请求体，因为 max_tokens 对于 count_tokens 不是必需的
+        import json
+        body = await raw_request.json()
+        
+        # 验证必需字段
+        if "model" not in body:
+            raise ValueError("缺少必需字段: model")
+        if "messages" not in body:
+            raise ValueError("缺少必需字段: messages")
+        
+        model = body.get("model")
+        messages = body.get("messages", [])
+        system = body.get("system")
+        logger.info(f"[Anthropic API] count_tokens 请求: model={model}, messages_count={len(messages)}")
+        
         # 简单估算：将所有文本内容拼接后按字符数估算
         # 实际应该使用tokenizer，这里只是提供一个近似值
         total_chars = 0
         
         # 计算system消息
-        if request.system:
-            if isinstance(request.system, str):
-                total_chars += len(request.system)
-            elif isinstance(request.system, list):
-                for block in request.system:
-                    if hasattr(block, 'text'):
+        if system:
+            if isinstance(system, str):
+                total_chars += len(system)
+            elif isinstance(system, list):
+                for block in system:
+                    if isinstance(block, dict) and 'text' in block:
+                        total_chars += len(block['text'])
+                    elif hasattr(block, 'text'):
                         total_chars += len(block.text)
         
         # 计算消息内容
-        for msg in request.messages:
-            content = msg.content
+        for msg in messages:
+            content = msg.get('content') if isinstance(msg, dict) else msg.content
             if isinstance(content, str):
                 total_chars += len(content)
             elif isinstance(content, list):
                 for block in content:
-                    if hasattr(block, 'text'):
+                    if isinstance(block, dict) and 'text' in block:
+                        total_chars += len(block['text'])
+                    elif hasattr(block, 'text'):
                         total_chars += len(block.text)
         
         # 粗略估算：平均每4个字符约1个token（英文）

@@ -191,24 +191,39 @@ def create_app() -> FastAPI:
     @app.exception_handler(SQLAlchemyError)
     async def database_exception_handler(request: Request, exc: SQLAlchemyError):
         """处理数据库异常"""
+        logger.error(f"数据库异常: {str(exc)}", exc_info=True)
+        
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "error_code": "DATABASE_ERROR",
                 "message": "数据库操作失败",
                 "details": {"error": str(exc)}
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
             }
         )
     
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         """处理通用异常"""
+        # 记录详细错误信息用于调试
+        logger.error(f"未处理的异常: {type(exc).__name__}: {str(exc)}", exc_info=True)
+        
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={
                 "error_code": "INTERNAL_SERVER_ERROR",
                 "message": "服务器内部错误",
-                "details": {"error": str(exc)}
+                "details": {"error": str(exc), "type": type(exc).__name__}
+            },
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "*",
+                "Access-Control-Allow-Headers": "*",
             }
         )
     

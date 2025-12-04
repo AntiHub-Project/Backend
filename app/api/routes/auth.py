@@ -562,7 +562,17 @@ async def get_current_user_info(
     
     返回当前用户的详细信息
     """
-    return UserResponse.model_validate(current_user)
+    try:
+        return UserResponse.model_validate(current_user)
+    except Exception as e:
+        # 记录详细错误信息
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"获取用户信息失败: {type(e).__name__}: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取用户信息失败: {str(e)}"
+        )
 
 
 # ==================== 用户验证 ====================

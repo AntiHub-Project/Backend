@@ -176,25 +176,29 @@ async def get_current_user(
         return user
         
     except (InvalidTokenError, TokenExpiredError, TokenBlacklistedError) as e:
+        logger.warning(f"令牌验证失败: {type(e).__name__}: {e.message}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=e.message,
             headers={"WWW-Authenticate": "Bearer"},
         )
     except UserNotFoundError as e:
+        logger.warning(f"用户不存在: {e.message}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=e.message,
         )
     except AccountDisabledError as e:
+        logger.warning(f"账号已禁用: {e.message}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=e.message,
         )
     except Exception as e:
+        logger.error(f"认证过程发生未预期错误: {type(e).__name__}: {str(e)}", exc_info=True)
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="认证失败",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"认证服务异常: {type(e).__name__}",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

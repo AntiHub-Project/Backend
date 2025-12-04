@@ -298,56 +298,71 @@ class AuthService:
             UserNotFoundError: 用户不存在
             AccountDisabledError: 账号已被禁用
         """
-        # 验证令牌
-        payload = await self.verify_token(token)
-        user_id = int(payload.sub)
-        
-        # 尝试从缓存获取用户信息
-        cache_key = f"jwt_user:{user_id}"
         try:
-            cached_data = await self.redis.get_json(cache_key)
-            if cached_data:
-                logger.debug(f"从缓存获取 JWT 用户信息: user_id={user_id}")
-                user = User(
-                    id=cached_data["id"],
-                    username=cached_data["username"],
-                    is_active=cached_data["is_active"],
-                    beta=cached_data.get("beta", 0)
+            # 验证令牌
+            payload = await self.verify_token(token)
+            user_id = int(payload.sub)
+            
+            # 尝试从缓存获取用户信息
+            cache_key = f"jwt_user:{user_id}"
+            try:
+                cached_data = await self.redis.get_json(cache_key)
+                if cached_data:
+                    logger.debug(f"从缓存获取 JWT 用户信息: user_id={user_id}")
+                    user = User(
+                        id=cached_data["id"],
+                        username=cached_data["username"],
+                        is_active=cached_data["is_active"],
+                        beta=cached_data.get("beta", 0)
+                    )
+                    return user
+            except Exception as e:
+                logger.warning(f"Redis 缓存读取失败 (user_id={user_id}): {type(e).__name__}: {str(e)}")
+            
+            # 缓存未命中，从数据库获取
+            try:
+                user = await self.user_repo.get_by_id(user_id)
+            except Exception as e:
+                logger.error(f"数据库查询用户失败 (user_id={user_id}): {type(e).__name__}: {str(e)}", exc_info=True)
+                raise
+            
+            if not user:
+                logger.warning(f"用户不存在: user_id={user_id}")
+                raise UserNotFoundError(
+                    message="用户不存在",
+                    details={"user_id": user_id}
                 )
-                return user
+            
+            # 检查账号状态
+            if not user.is_active:
+                logger.warning(f"账号已被禁用: user_id={user.id}")
+                raise AccountDisabledError(
+                    message="账号已被禁用",
+                    details={"user_id": user.id}
+                )
+            
+            # 存入缓存（短期缓存，30秒）
+            try:
+                user_data = {
+                    "id": user.id,
+                    "username": user.username,
+                    "is_active": user.is_active,
+                    "beta": user.beta
+                }
+                await self.redis.set_json(cache_key, user_data, expire=JWT_USER_CACHE_TTL)
+                logger.debug(f"JWT 用户信息已缓存: user_id={user_id}, TTL={JWT_USER_CACHE_TTL}s")
+            except Exception as e:
+                logger.warning(f"Redis 缓存写入失败 (user_id={user_id}): {type(e).__name__}: {str(e)}")
+            
+            return user
+            
+        except (InvalidTokenError, TokenExpiredError, TokenBlacklistedError, UserNotFoundError, AccountDisabledError):
+            # 这些是预期的业务异常，直接抛出
+            raise
         except Exception as e:
-            logger.warning(f"Redis 缓存读取失败: {e}")
-        
-        # 缓存未命中，从数据库获取
-        user = await self.user_repo.get_by_id(user_id)
-        
-        if not user:
-            raise UserNotFoundError(
-                message="用户不存在",
-                details={"user_id": user_id}
-            )
-        
-        # 检查账号状态
-        if not user.is_active:
-            raise AccountDisabledError(
-                message="账号已被禁用",
-                details={"user_id": user.id}
-            )
-        
-        # 存入缓存（短期缓存，30秒）
-        try:
-            user_data = {
-                "id": user.id,
-                "username": user.username,
-                "is_active": user.is_active,
-                "beta": user.beta
-            }
-            await self.redis.set_json(cache_key, user_data, expire=JWT_USER_CACHE_TTL)
-            logger.debug(f"JWT 用户信息已缓存: user_id={user_id}, TTL={JWT_USER_CACHE_TTL}s")
-        except Exception as e:
-            logger.warning(f"Redis 缓存写入失败: {e}")
-        
-        return user
+            # 未预期的异常，记录详细日志
+            logger.error(f"获取当前用户时发生未预期错误: {type(e).__name__}: {str(e)}", exc_info=True)
+            raise
     
     # ==================== 会话管理 ====================
     

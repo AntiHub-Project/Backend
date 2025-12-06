@@ -32,6 +32,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
+# 创建模块级别的 logger
+logger = logging.getLogger(__name__)
+
 
 # ==================== 生命周期事件 ====================
 

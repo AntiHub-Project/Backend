@@ -3,6 +3,9 @@ FastAPI 应用主文件
 应用入口点和配置
 """
 import logging
+import json
+import os
+from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -169,11 +172,49 @@ def create_app() -> FastAPI:
             "url": str(request.url),
             "path": request.url.path,
             "query_params": dict(request.query_params),
-            "headers": dict(request.headers),
+            "headers": {k: v for k, v in request.headers.items() if k.lower() not in ['authorization', 'x-api-key']},
             "body": exc.body if hasattr(exc, 'body') else None,
         }
         logger.warning(f"请求验证失败 - inputdump: {inputdump}")
         logger.warning(f"验证错误详情: {exc.errors()}")
+        
+        # Dump错误到文件
+        try:
+            error_dump_file = "error_dumps.json"
+            error_record = {
+                "timestamp": datetime.now().isoformat(),
+                "endpoint": request.url.path,
+                "error_type": "validation_error",
+                "user_request": inputdump,
+                "error_info": {
+                    "validation_errors": exc.errors(),
+                    "error_class": "RequestValidationError"
+                }
+            }
+            
+            # 读取现有的错误记录
+            existing_errors = []
+            if os.path.exists(error_dump_file):
+                try:
+                    with open(error_dump_file, "r", encoding="utf-8") as f:
+                        existing_errors = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    existing_errors = []
+            
+            # 添加新的错误记录
+            existing_errors.append(error_record)
+            
+            # 只保留最近100条记录
+            if len(existing_errors) > 100:
+                existing_errors = existing_errors[-100:]
+            
+            # 写入文件
+            with open(error_dump_file, "w", encoding="utf-8") as f:
+                json.dump(existing_errors, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"验证错误已dump到 {error_dump_file}")
+        except Exception as dump_error:
+            logger.error(f"dump验证错误失败: {str(dump_error)}")
         
         # 检查是否是 Anthropic API 端点
         if request.url.path.startswith("/v1/messages"):

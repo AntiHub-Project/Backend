@@ -6,6 +6,9 @@ Anthropic兼容的API端点
 from typing import Optional
 import uuid
 import logging
+import json
+import os
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +29,59 @@ from app.cache import RedisClient
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["Anthropic兼容API"])
+
+# 错误dump文件路径
+ERROR_DUMP_FILE = "error_dumps.json"
+
+
+def dump_error_to_file(
+    error_type: str,
+    user_request: dict,
+    error_info: dict,
+    endpoint: str = "/v1/messages"
+):
+    """
+    将错误信息dump到JSON文件
+    
+    Args:
+        error_type: 错误类型（如 "upstream_error", "validation_error"）
+        user_request: 用户的原始请求体
+        error_info: 错误详情
+        endpoint: API端点
+    """
+    try:
+        error_record = {
+            "timestamp": datetime.now().isoformat(),
+            "endpoint": endpoint,
+            "error_type": error_type,
+            "user_request": user_request,
+            "error_info": error_info
+        }
+        
+        # 读取现有的错误记录
+        existing_errors = []
+        if os.path.exists(ERROR_DUMP_FILE):
+            try:
+                with open(ERROR_DUMP_FILE, "r", encoding="utf-8") as f:
+                    existing_errors = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                existing_errors = []
+        
+        # 添加新的错误记录
+        existing_errors.append(error_record)
+        
+        # 只保留最近100条记录
+        if len(existing_errors) > 100:
+            existing_errors = existing_errors[-100:]
+        
+        # 写入文件
+        with open(ERROR_DUMP_FILE, "w", encoding="utf-8") as f:
+            json.dump(existing_errors, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"错误信息已dump到 {ERROR_DUMP_FILE}")
+        
+    except Exception as e:
+        logger.error(f"dump错误信息失败: {str(e)}")
 
 
 def get_kiro_service(
@@ -220,6 +276,17 @@ async def create_message(
         raise
     except ValueError as e:
         logger.error(f"请求验证错误: {str(e)}")
+        
+        # Dump错误信息
+        dump_error_to_file(
+            error_type="validation_error",
+            user_request=request.model_dump(),
+            error_info={
+                "error_message": str(e),
+                "error_class": type(e).__name__
+            }
+        )
+        
         error_response = AnthropicAdapter.create_error_response(
             error_type="invalid_request_error",
             message=str(e)
@@ -230,6 +297,28 @@ async def create_message(
         )
     except Exception as e:
         logger.error(f"消息创建失败: {str(e)}")
+        
+        # 尝试获取上游错误信息
+        upstream_error = None
+        if hasattr(e, 'response_data'):
+            upstream_error = e.response_data
+        elif hasattr(e, 'response'):
+            try:
+                upstream_error = e.response.json() if hasattr(e.response, 'json') else str(e.response.text if hasattr(e.response, 'text') else e.response)
+            except Exception:
+                upstream_error = str(e.response) if hasattr(e, 'response') else None
+        
+        # Dump错误信息
+        dump_error_to_file(
+            error_type="upstream_error",
+            user_request=request.model_dump(),
+            error_info={
+                "error_message": str(e),
+                "error_class": type(e).__name__,
+                "upstream_response": upstream_error
+            }
+        )
+        
         error_response = AnthropicAdapter.create_error_response(
             error_type="api_error",
             message=f"消息创建失败: {str(e)}"

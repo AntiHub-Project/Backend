@@ -320,3 +320,112 @@ async def get_user_flexible_with_x_api_key(
             detail=f"认证失败: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+async def get_user_from_goog_api_key(
+    x_goog_api_key: Optional[str] = Header(None, alias="x-goog-api-key"),
+    db: AsyncSession = Depends(get_db),
+    redis: RedisClient = Depends(get_redis),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+) -> Optional[User]:
+    """
+    通过 x-goog-api-key 标头获取用户
+    用于 Gemini 兼容的 API 端点
+    
+    优化：
+    1. 使用 Redis 缓存认证结果
+    2. update_last_used 改为后台任务
+    
+    Args:
+        x_goog_api_key: x-goog-api-key 标头值
+        db: 数据库会话
+        redis: Redis 客户端
+        background_tasks: 后台任务
+        
+    Returns:
+        User: 用户对象，如果未提供 API key 则返回 None
+        
+    Raises:
+        HTTPException: API key 无效或用户不存在时抛出错误
+    """
+    if not x_goog_api_key:
+        return None
+    
+    try:
+        # 使用缓存认证
+        return await get_user_from_api_key_with_cache(x_goog_api_key, db, redis, background_tasks)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"API密钥认证失败: {str(e)}"
+        )
+
+
+async def get_user_flexible_with_goog_api_key(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+    goog_api_key_user: Optional[User] = Depends(get_user_from_goog_api_key),
+    db: AsyncSession = Depends(get_db),
+    auth_service: AuthService = Depends(get_auth_service),
+    redis: RedisClient = Depends(get_redis),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+) -> User:
+    """
+    灵活认证：支持 JWT token、Bearer API key 或 x-goog-api-key 标头
+    用于 Gemini 兼容的 API 端点
+    
+    优先级：
+    1. x-goog-api-key 标头
+    2. Authorization Bearer token (JWT 或 API key)
+    
+    优化：
+    1. API key 认证使用 Redis 缓存
+    2. update_last_used 改为后台任务
+    
+    Args:
+        credentials: HTTP Authorization 凭证
+        goog_api_key_user: 通过 x-goog-api-key 标头获取的用户
+        db: 数据库会话
+        auth_service: 认证服务
+        redis: Redis 客户端
+        background_tasks: 后台任务
+        
+    Returns:
+        User: 用户对象
+        
+    Raises:
+        HTTPException: 认证失败
+    """
+    # 优先使用 x-goog-api-key 标头
+    if goog_api_key_user:
+        return goog_api_key_user
+    
+    # 如果没有 x-goog-api-key，检查 Authorization 标头
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="需要提供认证凭证（x-goog-api-key 标头或 Authorization Bearer token）",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    token = credentials.credentials
+    
+    try:
+        # 判断是 API key 还是 JWT token
+        if token.startswith('sk-'):
+            # API key 认证（使用缓存）
+            return await get_user_from_api_key_with_cache(token, db, redis, background_tasks)
+        else:
+            # JWT token 认证
+            user = await auth_service.get_current_user(token)
+            return user
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"认证失败: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

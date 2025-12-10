@@ -999,7 +999,6 @@ class AnthropicAdapter:
         buffer = ""
         chunk_count = 0
         
-        logger.info("开始收集流式响应...")
         
         async for chunk in openai_stream:
             chunk_count += 1
@@ -1010,8 +1009,6 @@ class AnthropicAdapter:
             else:
                 chunk_str = chunk
                 buffer += chunk
-            
-            logger.info(f"收到chunk #{chunk_count}: {repr(chunk_str[:200] if len(chunk_str) > 200 else chunk_str)}")
         
         # 流结束后，检查buffer中的内容
         # 可能是SSE格式（data: {...}）或者直接的JSON响应
@@ -1022,7 +1019,6 @@ class AnthropicAdapter:
             try:
                 # 尝试直接解析为JSON
                 data = json.loads(full_content)
-                logger.info(f"检测到非流式JSON响应: {data.get('object', 'unknown')}")
                 
                 # 这是一个完整的chat.completion响应，直接返回
                 if data.get('object') == 'chat.completion':
@@ -1173,9 +1169,6 @@ class AnthropicAdapter:
                                 tool_calls[tc_index]['name'] = func['name']
                             if 'arguments' in func:
                                 tool_calls[tc_index]['arguments'] += func['arguments']
-        
-        logger.info(f"流式响应收集完成: chunk_count={chunk_count}, accumulated_text={repr(accumulated_text[:100] if len(accumulated_text) > 100 else accumulated_text)}, input_tokens={input_tokens}, output_tokens={output_tokens}")
-        logger.info(f"剩余buffer: {repr(buffer[:200] if len(buffer) > 200 else buffer)}")
         
         # 构建完整的OpenAI响应
         message = {

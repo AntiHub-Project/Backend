@@ -19,6 +19,7 @@ from app.schemas.anthropic import (
     AnthropicErrorResponse,
     AnthropicErrorDetail,
 )
+from app.utils.thinking_parser import KiroThinkingTagParser, SegmentType, TextSegment
 
 logger = logging.getLogger(__name__)
 
@@ -559,21 +560,24 @@ class AnthropicAdapter:
         cls,
         openai_stream: AsyncGenerator[bytes, None],
         model: str,
-        request_id: str
+        request_id: str,
+        thinking_enabled: bool = False
     ) -> AsyncGenerator[str, None]:
         """
         将OpenAI流式响应转换为Anthropic流式响应格式
-        
+
         Args:
             openai_stream: OpenAI流式响应生成器
             model: 模型名称
             request_id: 请求ID
-            
+            thinking_enabled: 是否启用thinking解析（用于解析原始<thinking>标签）
+
         Yields:
             Anthropic格式的SSE事件
-            
+
         Note:
             支持将OpenAI格式的reasoning_content转换为Anthropic的thinking content block格式
+            如果上游返回原始的<thinking>标签，也会进行解析
         """
         # 发送message_start事件
         message_start = {
@@ -593,7 +597,7 @@ class AnthropicAdapter:
             }
         }
         yield f"event: message_start\ndata: {json.dumps(message_start, ensure_ascii=False)}\n\n"
-        
+
         # 跟踪状态
         accumulated_text = ""
         accumulated_thinking = ""
@@ -602,18 +606,24 @@ class AnthropicAdapter:
         output_tokens = 0
         finish_reason = None
         current_tool_calls = {}  # 跟踪工具调用
-        
+
         # content block 索引跟踪
         current_block_index = 0
-        
-        # thinking content 状态跟踪
-        has_thinking_content = False  # 是否有thinking内容
+
+        # thinking content 状态跟踪（reasoning_content字段）
+        has_reasoning_content = False  # 是否有reasoning_content
         thinking_block_started = False  # thinking块是否已开始
         thinking_block_stopped = False  # thinking块是否已结束
-        
+
         # text content 状态跟踪
         text_block_started = False  # text块是否已开始
-        
+
+        # Thinking parser（用于解析原始<thinking>标签）
+        thinking_parser: Optional[KiroThinkingTagParser] = None
+        if thinking_enabled:
+            thinking_parser = KiroThinkingTagParser()
+            logger.debug("Thinking parser enabled for stream")
+
         buffer = ""
         
         async for chunk in openai_stream:
@@ -663,7 +673,7 @@ class AnthropicAdapter:
                     # 支持多种格式：reasoning_content, reasoning, thinking_content
                     reasoning_delta = delta.get('reasoning_content') or delta.get('reasoning') or delta.get('thinking_content')
                     if reasoning_delta:
-                        has_thinking_content = True
+                        has_reasoning_content = True
                         accumulated_thinking += reasoning_delta
                         
                         # 如果thinking块还没开始，先发送content_block_start
@@ -723,57 +733,146 @@ class AnthropicAdapter:
                     # 处理文本内容
                     if 'content' in delta and delta['content']:
                         text_delta = delta['content']
-                        
-                        # 如果之前有thinking内容且thinking块还没结束，先结束thinking块
-                        if thinking_block_started and not thinking_block_stopped:
-                            thinking_block_stopped = True
-                            
-                            # 如果有签名，先发送签名delta
-                            if thinking_signature:
-                                signature_delta_event = {
-                                    "type": "content_block_delta",
+
+                        # 如果启用了thinking parser，先用parser解析
+                        if thinking_parser:
+                            segments = thinking_parser.push_and_parse(text_delta)
+
+                            for segment in segments:
+                                if segment.type == SegmentType.THINKING:
+                                    # Thinking内容
+                                    accumulated_thinking += segment.content
+                                    has_reasoning_content = True
+
+                                    # 如果thinking块还没开始，先发送content_block_start
+                                    if not thinking_block_started:
+                                        thinking_block_started = True
+                                        thinking_block_start = {
+                                            "type": "content_block_start",
+                                            "index": current_block_index,
+                                            "content_block": {
+                                                "type": "thinking",
+                                                "thinking": ""
+                                            }
+                                        }
+                                        yield f"event: content_block_start\ndata: {json.dumps(thinking_block_start, ensure_ascii=False)}\n\n"
+
+                                    # 发送thinking_delta
+                                    thinking_delta_event = {
+                                        "type": "content_block_delta",
+                                        "index": current_block_index,
+                                        "delta": {
+                                            "type": "thinking_delta",
+                                            "thinking": segment.content
+                                        }
+                                    }
+                                    yield f"event: content_block_delta\ndata: {json.dumps(thinking_delta_event, ensure_ascii=False)}\n\n"
+
+                                elif segment.type == SegmentType.TEXT:
+                                    # 普通文本内容
+
+                                    # 如果之前有thinking内容且thinking块还没结束，先结束thinking块
+                                    if thinking_block_started and not thinking_block_stopped:
+                                        thinking_block_stopped = True
+
+                                        # 如果有签名，先发送签名delta
+                                        if thinking_signature:
+                                            signature_delta_event = {
+                                                "type": "content_block_delta",
+                                                "index": current_block_index,
+                                                "delta": {
+                                                    "type": "signature_delta",
+                                                    "signature": thinking_signature
+                                                }
+                                            }
+                                            yield f"event: content_block_delta\ndata: {json.dumps(signature_delta_event, ensure_ascii=False)}\n\n"
+
+                                        # 发送thinking块的content_block_stop
+                                        thinking_block_stop = {
+                                            "type": "content_block_stop",
+                                            "index": current_block_index
+                                        }
+                                        yield f"event: content_block_stop\ndata: {json.dumps(thinking_block_stop, ensure_ascii=False)}\n\n"
+                                        # 增加block索引
+                                        current_block_index += 1
+
+                                    # 如果text块还没开始，先发送content_block_start
+                                    if not text_block_started:
+                                        text_block_started = True
+                                        text_block_start = {
+                                            "type": "content_block_start",
+                                            "index": current_block_index,
+                                            "content_block": {
+                                                "type": "text",
+                                                "text": ""
+                                            }
+                                        }
+                                        yield f"event: content_block_start\ndata: {json.dumps(text_block_start, ensure_ascii=False)}\n\n"
+
+                                    accumulated_text += segment.content
+
+                                    # 发送content_block_delta事件
+                                    content_delta = {
+                                        "type": "content_block_delta",
+                                        "index": current_block_index,
+                                        "delta": {
+                                            "type": "text_delta",
+                                            "text": segment.content
+                                        }
+                                    }
+                                    yield f"event: content_block_delta\ndata: {json.dumps(content_delta, ensure_ascii=False)}\n\n"
+                        else:
+                            # 没有启用thinking parser，直接处理为文本
+                            # 如果之前有thinking内容且thinking块还没结束，先结束thinking块
+                            if thinking_block_started and not thinking_block_stopped:
+                                thinking_block_stopped = True
+
+                                # 如果有签名，先发送签名delta
+                                if thinking_signature:
+                                    signature_delta_event = {
+                                        "type": "content_block_delta",
+                                        "index": current_block_index,
+                                        "delta": {
+                                            "type": "signature_delta",
+                                            "signature": thinking_signature
+                                        }
+                                    }
+                                    yield f"event: content_block_delta\ndata: {json.dumps(signature_delta_event, ensure_ascii=False)}\n\n"
+
+                                # 发送thinking块的content_block_stop
+                                thinking_block_stop = {
+                                    "type": "content_block_stop",
+                                    "index": current_block_index
+                                }
+                                yield f"event: content_block_stop\ndata: {json.dumps(thinking_block_stop, ensure_ascii=False)}\n\n"
+                                # 增加block索引
+                                current_block_index += 1
+
+                            # 如果text块还没开始，先发送content_block_start
+                            if not text_block_started:
+                                text_block_started = True
+                                text_block_start = {
+                                    "type": "content_block_start",
                                     "index": current_block_index,
-                                    "delta": {
-                                        "type": "signature_delta",
-                                        "signature": thinking_signature
+                                    "content_block": {
+                                        "type": "text",
+                                        "text": ""
                                     }
                                 }
-                                yield f"event: content_block_delta\ndata: {json.dumps(signature_delta_event, ensure_ascii=False)}\n\n"
-                            
-                            # 发送thinking块的content_block_stop
-                            thinking_block_stop = {
-                                "type": "content_block_stop",
-                                "index": current_block_index
-                            }
-                            yield f"event: content_block_stop\ndata: {json.dumps(thinking_block_stop, ensure_ascii=False)}\n\n"
-                            # 增加block索引
-                            current_block_index += 1
-                        
-                        # 如果text块还没开始，先发送content_block_start
-                        if not text_block_started:
-                            text_block_started = True
-                            text_block_start = {
-                                "type": "content_block_start",
+                                yield f"event: content_block_start\ndata: {json.dumps(text_block_start, ensure_ascii=False)}\n\n"
+
+                            accumulated_text += text_delta
+
+                            # 发送content_block_delta事件
+                            content_delta = {
+                                "type": "content_block_delta",
                                 "index": current_block_index,
-                                "content_block": {
-                                    "type": "text",
-                                    "text": ""
+                                "delta": {
+                                    "type": "text_delta",
+                                    "text": text_delta
                                 }
                             }
-                            yield f"event: content_block_start\ndata: {json.dumps(text_block_start, ensure_ascii=False)}\n\n"
-                        
-                        accumulated_text += text_delta
-                        
-                        # 发送content_block_delta事件
-                        content_delta = {
-                            "type": "content_block_delta",
-                            "index": current_block_index,
-                            "delta": {
-                                "type": "text_delta",
-                                "text": text_delta
-                            }
-                        }
-                        yield f"event: content_block_delta\ndata: {json.dumps(content_delta, ensure_ascii=False)}\n\n"
+                            yield f"event: content_block_delta\ndata: {json.dumps(content_delta, ensure_ascii=False)}\n\n"
                     
                     # 处理工具调用
                     if 'tool_calls' in delta:
@@ -840,7 +939,93 @@ class AnthropicAdapter:
                                     current_tool_calls[tc_index]['arguments'] += args_chunk
         
         # 流结束后的清理工作
-        
+
+        # 如果启用了thinking parser，刷新缓冲区
+        if thinking_parser:
+            final_segments = thinking_parser.flush()
+            for segment in final_segments:
+                if segment.type == SegmentType.THINKING:
+                    # Thinking内容
+                    accumulated_thinking += segment.content
+                    has_reasoning_content = True
+
+                    # 如果thinking块还没开始，先发送content_block_start
+                    if not thinking_block_started:
+                        thinking_block_start = {
+                            "type": "content_block_start",
+                            "index": current_block_index,
+                            "content_block": {
+                                "type": "thinking",
+                                "thinking": ""
+                            }
+                        }
+                        yield f"event: content_block_start\ndata: {json.dumps(thinking_block_start, ensure_ascii=False)}\n\n"
+                        thinking_block_started = True
+
+                    # 发送thinking_delta
+                    thinking_delta_event = {
+                        "type": "content_block_delta",
+                        "index": current_block_index,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": segment.content
+                        }
+                    }
+                    yield f"event: content_block_delta\ndata: {json.dumps(thinking_delta_event, ensure_ascii=False)}\n\n"
+
+                elif segment.type == SegmentType.TEXT:
+                    # 普通文本内容
+
+                    # 如果之前有thinking内容且thinking块还没结束，先结束thinking块
+                    if thinking_block_started and not thinking_block_stopped:
+                        thinking_block_stopped = True
+
+                        # 如果有签名，先发送签名delta
+                        if thinking_signature:
+                            signature_delta_event = {
+                                "type": "content_block_delta",
+                                "index": current_block_index,
+                                "delta": {
+                                    "type": "signature_delta",
+                                    "signature": thinking_signature
+                                }
+                            }
+                            yield f"event: content_block_delta\ndata: {json.dumps(signature_delta_event, ensure_ascii=False)}\n\n"
+
+                        # 发送thinking块的content_block_stop
+                        thinking_block_stop = {
+                            "type": "content_block_stop",
+                            "index": current_block_index
+                        }
+                        yield f"event: content_block_stop\ndata: {json.dumps(thinking_block_stop, ensure_ascii=False)}\n\n"
+                        current_block_index += 1
+
+                    # 如果text块还没开始，先发送content_block_start
+                    if not text_block_started:
+                        text_block_started = True
+                        text_block_start = {
+                            "type": "content_block_start",
+                            "index": current_block_index,
+                            "content_block": {
+                                "type": "text",
+                                "text": ""
+                            }
+                        }
+                        yield f"event: content_block_start\ndata: {json.dumps(text_block_start, ensure_ascii=False)}\n\n"
+
+                    accumulated_text += segment.content
+
+                    # 发送content_block_delta事件
+                    content_delta = {
+                        "type": "content_block_delta",
+                        "index": current_block_index,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": segment.content
+                        }
+                    }
+                    yield f"event: content_block_delta\ndata: {json.dumps(content_delta, ensure_ascii=False)}\n\n"
+
         # 如果thinking块开始了但还没结束，先结束它
         if thinking_block_started and not thinking_block_stopped:
             thinking_block_stopped = True
@@ -971,17 +1156,19 @@ class AnthropicAdapter:
     @classmethod
     async def collect_openai_stream_to_response(
         cls,
-        openai_stream: AsyncGenerator[bytes, None]
+        openai_stream: AsyncGenerator[bytes, None],
+        thinking_enabled: bool = False
     ) -> Dict[str, Any]:
         """
         将OpenAI流式响应收集并转换为完整的非流式响应格式
-        
+
         当用户请求非流式响应（stream=false），但上游总是返回流式响应时，
         使用此方法将流式响应收集并组装成完整的响应。
-        
+
         Args:
             openai_stream: OpenAI流式响应生成器
-            
+            thinking_enabled: 是否启用thinking解析（用于解析原始<thinking>标签）
+
         Returns:
             OpenAI格式的完整响应字典
         """
@@ -995,7 +1182,13 @@ class AnthropicAdapter:
         model = ""
         response_id = ""
         tool_calls = {}  # 跟踪工具调用 {index: {id, name, arguments}}
-        
+
+        # Thinking parser（用于解析原始<thinking>标签）
+        thinking_parser: Optional[KiroThinkingTagParser] = None
+        if thinking_enabled:
+            thinking_parser = KiroThinkingTagParser()
+            logger.debug("Thinking parser enabled for non-stream response")
+
         buffer = ""
         chunk_count = 0
         
@@ -1132,7 +1325,21 @@ class AnthropicAdapter:
                 
                 # 处理文本内容
                 if 'content' in delta and delta['content']:
-                    accumulated_text += delta['content']
+                    content_delta = delta['content']
+
+                    # 如果启用了thinking parser，先解析
+                    if thinking_parser:
+                        segments = thinking_parser.push_and_parse(content_delta)
+                        for segment in segments:
+                            if segment.type == SegmentType.THINKING:
+                                # Thinking内容
+                                accumulated_reasoning += segment.content
+                            elif segment.type == SegmentType.TEXT:
+                                # 普通文本
+                                accumulated_text += segment.content
+                    else:
+                        # 没有启用thinking parser，直接添加
+                        accumulated_text += content_delta
                 
                 # 处理工具调用
                 if 'tool_calls' in delta:
@@ -1169,7 +1376,18 @@ class AnthropicAdapter:
                                 tool_calls[tc_index]['name'] = func['name']
                             if 'arguments' in func:
                                 tool_calls[tc_index]['arguments'] += func['arguments']
-        
+
+        # 如果启用了thinking parser，刷新缓冲区
+        if thinking_parser:
+            final_segments = thinking_parser.flush()
+            for segment in final_segments:
+                if segment.type == SegmentType.THINKING:
+                    # Thinking内容
+                    accumulated_reasoning += segment.content
+                elif segment.type == SegmentType.TEXT:
+                    # 普通文本
+                    accumulated_text += segment.content
+
         # 构建完整的OpenAI响应
         message = {
             "role": "assistant",

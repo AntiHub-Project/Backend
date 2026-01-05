@@ -3,6 +3,7 @@ Kiro账号管理API路由
 提供Kiro账号的管理操作，通过插件API实现
 仅对beta用户开放
 """
+import secrets
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import JSONResponse
@@ -129,6 +130,72 @@ async def create_account(
     - **client_secret**: IdC客户端密钥（IdC认证时必填）
     """
     try:
+        if "refresh_token" not in account_data and "refreshToken" in account_data:
+            account_data["refresh_token"] = account_data.get("refreshToken")
+        if "auth_method" not in account_data and "authMethod" in account_data:
+            account_data["auth_method"] = account_data.get("authMethod")
+        if "account_name" not in account_data and "accountName" in account_data:
+            account_data["account_name"] = account_data.get("accountName")
+        if "client_id" not in account_data and "clientId" in account_data:
+            account_data["client_id"] = account_data.get("clientId")
+        if "client_secret" not in account_data and "clientSecret" in account_data:
+            account_data["client_secret"] = account_data.get("clientSecret")
+        if "machineid" not in account_data and "machineId" in account_data:
+            account_data["machineid"] = account_data.get("machineId")
+        if "is_shared" not in account_data and "isShared" in account_data:
+            account_data["is_shared"] = account_data.get("isShared")
+
+        auth_method = (account_data.get("auth_method") or "Social").strip()
+        if auth_method.lower() == "social":
+            auth_method = "Social"
+        elif auth_method.lower() == "idc":
+            auth_method = "IdC"
+        account_data["auth_method"] = auth_method
+
+        refresh_token = account_data.get("refresh_token")
+        if not refresh_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="missing refresh_token"
+            )
+
+        if auth_method not in ("Social", "IdC"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="auth_method must be Social or IdC"
+            )
+
+        if auth_method == "IdC" and (not account_data.get("client_id") or not account_data.get("client_secret")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="IdC requires client_id and client_secret"
+            )
+
+        if not account_data.get("machineid"):
+            account_data["machineid"] = secrets.token_hex(32)
+
+        is_shared = account_data.get("is_shared")
+        if is_shared is None:
+            is_shared = 0
+        if isinstance(is_shared, bool):
+            is_shared = 1 if is_shared else 0
+        try:
+            is_shared = int(is_shared)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="is_shared must be 0 or 1"
+            )
+        if is_shared not in (0, 1):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="is_shared must be 0 or 1"
+            )
+        account_data["is_shared"] = is_shared
+
+        if not account_data.get("account_name"):
+            account_data["account_name"] = "Kiro Account"
+
         result = await service.create_account(current_user.id, account_data)
         return result
     except ValueError as e:

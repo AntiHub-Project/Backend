@@ -19,6 +19,7 @@ from app.models.user import User
 from app.services.plugin_api_service import PluginAPIService
 from app.services.kiro_service import KiroService
 from app.services.anthropic_adapter import AnthropicAdapter
+from app.utils.kiro_converters import apply_thinking_to_request, is_thinking_enabled
 from app.schemas.anthropic import (
     AnthropicMessagesRequest,
     AnthropicMessagesResponse,
@@ -174,6 +175,14 @@ async def create_message(
         
         # 将Anthropic请求转换为OpenAI格式
         openai_request = AnthropicAdapter.anthropic_to_openai_request(request)
+
+        # 提取thinking配置
+        thinking_config = getattr(request, 'thinking', None)
+        thinking_enabled = is_thinking_enabled(thinking_config)
+
+        # 如果是Kiro服务，应用thinking配置
+        if use_kiro:
+            openai_request = apply_thinking_to_request(openai_request, thinking_config)
         
         # 准备额外的请求头
         extra_headers = {}
@@ -203,7 +212,8 @@ async def create_message(
                     async for event in AnthropicAdapter.convert_openai_stream_to_anthropic(
                         openai_stream,
                         model=request.model,
-                        request_id=request_id
+                        request_id=request_id,
+                        thinking_enabled=thinking_enabled
                     ):
                         yield event
                         
@@ -258,7 +268,8 @@ async def create_message(
             
             # 收集流式响应并转换为完整的OpenAI响应
             openai_response = await AnthropicAdapter.collect_openai_stream_to_response(
-                openai_stream
+                openai_stream,
+                thinking_enabled=thinking_enabled
             )
             
             # 转换响应为Anthropic格式

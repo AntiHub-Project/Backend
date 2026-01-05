@@ -114,7 +114,7 @@ class AnthropicMessagesRequest(BaseModel):
     model: str = Field(..., description="模型名称")
     messages: List[AnthropicMessage] = Field(..., description="消息列表")
     max_tokens: int = Field(..., description="最大生成token数")
-    
+
     # 可选参数
     system: Optional[Union[str, List[AnthropicTextContent]]] = Field(None, description="系统提示")
     stop_sequences: Optional[List[str]] = Field(None, description="停止序列")
@@ -122,14 +122,20 @@ class AnthropicMessagesRequest(BaseModel):
     temperature: Optional[float] = Field(None, ge=0, le=1, description="温度参数")
     top_p: Optional[float] = Field(None, ge=0, le=1, description="Top-p采样")
     top_k: Optional[int] = Field(None, ge=0, description="Top-k采样")
-    
+
+    # Extended Thinking 支持
+    thinking: Optional[Union[Dict[str, Any], bool, str]] = Field(
+        None,
+        description="Extended Thinking 配置。可以是 bool、'enabled' 或 dict 格式如 {'type': 'enabled', 'budget_tokens': 10000}"
+    )
+
     # 工具相关
     tools: Optional[List[AnthropicTool]] = Field(None, description="可用工具列表")
     tool_choice: Optional[Union[AnthropicToolChoice, Dict[str, Any]]] = Field(None, description="工具选择策略")
-    
+
     # 元数据
     metadata: Optional[AnthropicMetadata] = Field(None, description="请求元数据")
-    
+
     model_config = {"extra": "allow"}
 
 
